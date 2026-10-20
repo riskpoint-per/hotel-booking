@@ -1,0 +1,1564 @@
+{
+  "info": {
+    "_postman_id": "de3b80fa-1b56-41db-9a8f-16bb87bdf817",
+    "name": "Hotel Booking API",
+    "description": "Every endpoint of the Hotel Booking API, with happy paths and error cases.\n\n**Run order matters.** Use the Collection Runner (or `newman run`) top to bottom: the Admin folder resets and seeds the database, and later requests rely on that data and on the booking reference captured by *Create booking*.\n\nDates are computed automatically by the collection pre-request script (check-in 30 days from today, 3 nights), so the collection never goes stale.\n\nAfter seeding, IDs are fixed: hotel 1 *Seaside Retreat* has rooms 1–6 (101, 102 single · 201, 202 double · 301, 302 deluxe); hotel 2 *City Central Hotel* has rooms 7–12. Capacities: single 1, double 2, deluxe 4.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080"
+    },
+    {
+      "key": "hotelId",
+      "value": "1"
+    },
+    {
+      "key": "bookingReference",
+      "value": "BK-SEED0001",
+      "description": "Overwritten by 'Create booking'"
+    },
+    {
+      "key": "seedReference",
+      "value": "BK-SEED0001"
+    },
+    {
+      "key": "checkIn",
+      "value": ""
+    },
+    {
+      "key": "checkOut",
+      "value": ""
+    },
+    {
+      "key": "overlapCheckIn",
+      "value": ""
+    },
+    {
+      "key": "overlapCheckOut",
+      "value": ""
+    },
+    {
+      "key": "backToBackCheckOut",
+      "value": ""
+    },
+    {
+      "key": "pastDate",
+      "value": ""
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Compute test dates relative to today (UTC) so the collection never expires.",
+          "const day = (offset) => {",
+          "  const d = new Date();",
+          "  d.setUTCHours(0, 0, 0, 0);",
+          "  d.setUTCDate(d.getUTCDate() + offset);",
+          "  return d.toISOString().slice(0, 10);",
+          "};",
+          "pm.collectionVariables.set('checkIn', day(30));",
+          "pm.collectionVariables.set('checkOut', day(33));",
+          "pm.collectionVariables.set('overlapCheckIn', day(32));   // overlaps the last night",
+          "pm.collectionVariables.set('overlapCheckOut', day(35));",
+          "pm.collectionVariables.set('backToBackCheckOut', day(35)); // starts on checkOut day",
+          "pm.collectionVariables.set('pastDate', day(-5));"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "description": "Liveness and database connectivity.",
+      "item": [
+        {
+          "name": "Health check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
+            "description": "Returns 200 when the API is up and the database answers a ping, 503 otherwise."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Database ok\", () => pm.expect(pm.response.json().database).to.eql(\"ok\"));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Admin (test data)",
+      "description": "Reset and seed the database. Run these first.",
+      "item": [
+        {
+          "name": "Reset database",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/admin/reset",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "reset"
+              ]
+            },
+            "description": "Removes all data (hotels, rooms, room types, bookings) and restarts ID sequences."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Seed database",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/admin/seed",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "seed"
+              ]
+            },
+            "description": "Resets, then inserts 3 room types, 2 hotels × 6 rooms and one sample booking `BK-SEED0001`. Idempotent."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 201\", () => pm.response.to.have.status(201));",
+                  "const s = pm.response.json().seeded;",
+                  "pm.test(\"Seeded 2 hotels and 12 rooms\", () => { pm.expect(s.hotels).to.eql(2); pm.expect(s.rooms).to.eql(12); });",
+                  "pm.collectionVariables.set(\"seedReference\", s.sampleBookingReference);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Hotels",
+      "description": "Find hotels by name.",
+      "item": [
+        {
+          "name": "Find hotel by name",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/hotels?name=seaside",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "hotels"
+              ],
+              "query": [
+                {
+                  "key": "name",
+                  "value": "seaside",
+                  "description": "Partial, case-insensitive"
+                }
+              ]
+            },
+            "description": "Returns hotels whose name contains the search term."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test(\"One hotel found\", () => pm.expect(b.count).to.eql(1));",
+                  "pm.test(\"It is Seaside Retreat\", () => pm.expect(b.data[0].name).to.eql(\"Seaside Retreat\"));",
+                  "pm.collectionVariables.set(\"hotelId\", b.data[0].id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Find hotel by name – no match",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/hotels?name=nonexistent",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "hotels"
+              ],
+              "query": [
+                {
+                  "key": "name",
+                  "value": "nonexistent"
+                }
+              ]
+            },
+            "description": "No match returns 200 with an empty list, not 404."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Empty list\", () => pm.expect(pm.response.json().count).to.eql(0));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List all hotels",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/hotels",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "hotels"
+              ]
+            },
+            "description": "Without `name`, every hotel is returned."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Two hotels\", () => pm.expect(pm.response.json().count).to.eql(2));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get hotel by id",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/hotels/{{hotelId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "hotels",
+                "{{hotelId}}"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Correct hotel\", () => pm.expect(pm.response.json().id).to.eql(Number(pm.collectionVariables.get(\"hotelId\"))));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get hotel – not found",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/hotels/990",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "hotels",
+                "990"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 404\", () => pm.response.to.have.status(404));",
+                  "pm.test(\"error is not_found\", () => pm.expect(pm.response.json().error).to.eql(\"not_found\"));",
+                  "pm.test(\"Error body has error and message\", () => { const b = pm.response.json(); pm.expect(b).to.have.property(\"error\"); pm.expect(b).to.have.property(\"message\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get hotel – invalid id",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/hotels/abc",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "hotels",
+                "abc"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"error is validation_error\", () => pm.expect(pm.response.json().error).to.eql(\"validation_error\"));",
+                  "pm.test(\"Error body has error and message\", () => { const b = pm.response.json(); pm.expect(b).to.have.property(\"error\"); pm.expect(b).to.have.property(\"message\"); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Availability",
+      "description": "Rooms free for every night of the stay that can hold the party.",
+      "item": [
+        {
+          "name": "Available rooms – 1 guest",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/hotels/{{hotelId}}/rooms/available?checkIn={{checkIn}}&checkOut={{checkOut}}&guests=1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "hotels",
+                "{{hotelId}}",
+                "rooms",
+                "available"
+              ],
+              "query": [
+                {
+                  "key": "checkIn",
+                  "value": "{{checkIn}}",
+                  "description": "Arrival date, YYYY-MM-DD"
+                },
+                {
+                  "key": "checkOut",
+                  "value": "{{checkOut}}",
+                  "description": "Departure date, YYYY-MM-DD (exclusive)"
+                },
+                {
+                  "key": "guests",
+                  "value": "1",
+                  "description": "Number of people"
+                }
+              ]
+            },
+            "description": "Any room fits one person: all 6 rooms."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"All 6 rooms\", () => pm.expect(pm.response.json().count).to.eql(6));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Available rooms – 2 guests",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/hotels/{{hotelId}}/rooms/available?checkIn={{checkIn}}&checkOut={{checkOut}}&guests=2",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "hotels",
+                "{{hotelId}}",
+                "rooms",
+                "available"
+              ],
+              "query": [
+                {
+                  "key": "checkIn",
+                  "value": "{{checkIn}}",
+                  "description": "Arrival date, YYYY-MM-DD"
+                },
+                {
+                  "key": "checkOut",
+                  "value": "{{checkOut}}",
+                  "description": "Departure date, YYYY-MM-DD (exclusive)"
+                },
+                {
+                  "key": "guests",
+                  "value": "2",
+                  "description": "Number of people"
+                }
+              ]
+            },
+            "description": "Doubles and deluxes only."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Rooms are ['201', '202', '301', '302']\", () => pm.expect(pm.response.json().data.map(r => r.roomNumber)).to.eql([\"201\", \"202\", \"301\", \"302\"]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Available rooms – 4 guests",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/hotels/{{hotelId}}/rooms/available?checkIn={{checkIn}}&checkOut={{checkOut}}&guests=4",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "hotels",
+                "{{hotelId}}",
+                "rooms",
+                "available"
+              ],
+              "query": [
+                {
+                  "key": "checkIn",
+                  "value": "{{checkIn}}",
+                  "description": "Arrival date, YYYY-MM-DD"
+                },
+                {
+                  "key": "checkOut",
+                  "value": "{{checkOut}}",
+                  "description": "Departure date, YYYY-MM-DD (exclusive)"
+                },
+                {
+                  "key": "guests",
+                  "value": "4",
+                  "description": "Number of people"
+                }
+              ]
+            },
+            "description": "Deluxes only."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Rooms are ['301', '302']\", () => pm.expect(pm.response.json().data.map(r => r.roomNumber)).to.eql([\"301\", \"302\"]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Available rooms – more guests than any room",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/hotels/{{hotelId}}/rooms/available?checkIn={{checkIn}}&checkOut={{checkOut}}&guests=5",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "hotels",
+                "{{hotelId}}",
+                "rooms",
+                "available"
+              ],
+              "query": [
+                {
+                  "key": "checkIn",
+                  "value": "{{checkIn}}",
+                  "description": "Arrival date, YYYY-MM-DD"
+                },
+                {
+                  "key": "checkOut",
+                  "value": "{{checkOut}}",
+                  "description": "Departure date, YYYY-MM-DD (exclusive)"
+                },
+                {
+                  "key": "guests",
+                  "value": "5",
+                  "description": "Number of people"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"No rooms\", () => pm.expect(pm.response.json().count).to.eql(0));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Available rooms – check-out before check-in",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/hotels/{{hotelId}}/rooms/available?checkIn={{checkOut}}&checkOut={{checkIn}}&guests=2",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "hotels",
+                "{{hotelId}}",
+                "rooms",
+                "available"
+              ],
+              "query": [
+                {
+                  "key": "checkIn",
+                  "value": "{{checkOut}}",
+                  "description": "Arrival date, YYYY-MM-DD"
+                },
+                {
+                  "key": "checkOut",
+                  "value": "{{checkIn}}",
+                  "description": "Departure date, YYYY-MM-DD (exclusive)"
+                },
+                {
+                  "key": "guests",
+                  "value": "2",
+                  "description": "Number of people"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"error is validation_error\", () => pm.expect(pm.response.json().error).to.eql(\"validation_error\"));",
+                  "pm.test(\"Error body has error and message\", () => { const b = pm.response.json(); pm.expect(b).to.have.property(\"error\"); pm.expect(b).to.have.property(\"message\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Available rooms – check-in in the past",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/hotels/{{hotelId}}/rooms/available?checkIn={{pastDate}}&checkOut={{checkIn}}&guests=1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "hotels",
+                "{{hotelId}}",
+                "rooms",
+                "available"
+              ],
+              "query": [
+                {
+                  "key": "checkIn",
+                  "value": "{{pastDate}}",
+                  "description": "Arrival date, YYYY-MM-DD"
+                },
+                {
+                  "key": "checkOut",
+                  "value": "{{checkIn}}",
+                  "description": "Departure date, YYYY-MM-DD (exclusive)"
+                },
+                {
+                  "key": "guests",
+                  "value": "1",
+                  "description": "Number of people"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"error is validation_error\", () => pm.expect(pm.response.json().error).to.eql(\"validation_error\"));",
+                  "pm.test(\"Error body has error and message\", () => { const b = pm.response.json(); pm.expect(b).to.have.property(\"error\"); pm.expect(b).to.have.property(\"message\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Available rooms – missing parameters",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/hotels/{{hotelId}}/rooms/available",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "hotels",
+                "{{hotelId}}",
+                "rooms",
+                "available"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"Each missing field reported\", () => pm.expect(pm.response.json().fields).to.have.all.keys(\"checkIn\", \"checkOut\", \"guests\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Available rooms – hotel not found",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/hotels/990/rooms/available?checkIn={{checkIn}}&checkOut={{checkOut}}&guests=1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "hotels",
+                "990",
+                "rooms",
+                "available"
+              ],
+              "query": [
+                {
+                  "key": "checkIn",
+                  "value": "{{checkIn}}",
+                  "description": "Arrival date, YYYY-MM-DD"
+                },
+                {
+                  "key": "checkOut",
+                  "value": "{{checkOut}}",
+                  "description": "Departure date, YYYY-MM-DD (exclusive)"
+                },
+                {
+                  "key": "guests",
+                  "value": "1",
+                  "description": "Number of people"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 404\", () => pm.response.to.have.status(404));",
+                  "pm.test(\"error is not_found\", () => pm.expect(pm.response.json().error).to.eql(\"not_found\"));",
+                  "pm.test(\"Error body has error and message\", () => { const b = pm.response.json(); pm.expect(b).to.have.property(\"error\"); pm.expect(b).to.have.property(\"message\"); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Bookings",
+      "description": "Book a room and look bookings up by reference.",
+      "item": [
+        {
+          "name": "Create booking",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/bookings",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "bookings"
+              ]
+            },
+            "description": "Books deluxe room 301 for 3 people. Returns 201 with a `Location` header. The confirmation email is logged by the API 2 seconds later.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"hotelId\": 1,\n  \"roomId\": 5,\n  \"guestName\": \"Rob Pike\",\n  \"guestEmail\": \"rob@example.com\",\n  \"guests\": 3,\n  \"checkIn\": \"{{checkIn}}\",\n  \"checkOut\": \"{{checkOut}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 201\", () => pm.response.to.have.status(201));",
+                  "const b = pm.response.json();",
+                  "pm.test(\"Reference format\", () => pm.expect(b.reference).to.match(/^BK-[0-9A-HJKMNP-TV-Z]{8}$/));",
+                  "pm.test(\"3 nights\", () => pm.expect(b.nights).to.eql(3));",
+                  "pm.test(\"Location header\", () => pm.expect(pm.response.headers.get(\"Location\")).to.eql(\"/bookings/\" + b.reference));",
+                  "pm.collectionVariables.set(\"bookingReference\", b.reference);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get booking by reference",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/bookings/{{bookingReference}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "bookings",
+                "{{bookingReference}}"
+              ]
+            },
+            "description": "Uses the reference captured by *Create booking*."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test(\"Same reference\", () => pm.expect(b.reference).to.eql(pm.collectionVariables.get(\"bookingReference\")));",
+                  "pm.test(\"Room 301\", () => pm.expect(b.roomNumber).to.eql(\"301\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get seeded booking",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/bookings/{{seedReference}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "bookings",
+                "{{seedReference}}"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Jane Doe\", () => pm.expect(pm.response.json().guestName).to.eql(\"Jane Doe\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get booking – lowercase reference",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/bookings/bk-seed0001",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "bookings",
+                "bk-seed0001"
+              ]
+            },
+            "description": "References are case-insensitive on lookup."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get booking – not found",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/bookings/BK-DOESNOT1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "bookings",
+                "BK-DOESNOT1"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 404\", () => pm.response.to.have.status(404));",
+                  "pm.test(\"error is not_found\", () => pm.expect(pm.response.json().error).to.eql(\"not_found\"));",
+                  "pm.test(\"Error body has error and message\", () => { const b = pm.response.json(); pm.expect(b).to.have.property(\"error\"); pm.expect(b).to.have.property(\"message\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Availability after booking – 3 guests",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/hotels/{{hotelId}}/rooms/available?checkIn={{checkIn}}&checkOut={{checkOut}}&guests=3",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "hotels",
+                "{{hotelId}}",
+                "rooms",
+                "available"
+              ],
+              "query": [
+                {
+                  "key": "checkIn",
+                  "value": "{{checkIn}}",
+                  "description": "Arrival date, YYYY-MM-DD"
+                },
+                {
+                  "key": "checkOut",
+                  "value": "{{checkOut}}",
+                  "description": "Departure date, YYYY-MM-DD (exclusive)"
+                },
+                {
+                  "key": "guests",
+                  "value": "3",
+                  "description": "Number of people"
+                }
+              ]
+            },
+            "description": "Room 301 is now taken for these nights, so only 302 remains."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Rooms are ['302']\", () => pm.expect(pm.response.json().data.map(r => r.roomNumber)).to.eql([\"302\"]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create booking – back-to-back stay",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/bookings",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "bookings"
+              ]
+            },
+            "description": "Checking in on the previous guest's check-out day is allowed.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"hotelId\": 1,\n  \"roomId\": 5,\n  \"guestName\": \"Luca Toni\",\n  \"guestEmail\": \"luca@example.com\",\n  \"guests\": 4,\n  \"checkIn\": \"{{checkOut}}\",\n  \"checkOut\": \"{{backToBackCheckOut}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 201\", () => pm.response.to.have.status(201));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Bookings – rule violations",
+      "description": "Each request breaks one rule and should be rejected.",
+      "item": [
+        {
+          "name": "Double booking – overlapping nights",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/bookings",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "bookings"
+              ]
+            },
+            "description": "Room 301 is already booked on the last night of this range.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"hotelId\": 1,\n  \"roomId\": 5,\n  \"guestName\": \"Charles Babbage\",\n  \"guestEmail\": \"charles@example.com\",\n  \"guests\": 2,\n  \"checkIn\": \"{{overlapCheckIn}}\",\n  \"checkOut\": \"{{overlapCheckOut}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 409\", () => pm.response.to.have.status(409));",
+                  "pm.test(\"error is room_unavailable\", () => pm.expect(pm.response.json().error).to.eql(\"room_unavailable\"));",
+                  "pm.test(\"Error body has error and message\", () => { const b = pm.response.json(); pm.expect(b).to.have.property(\"error\"); pm.expect(b).to.have.property(\"message\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Double booking – identical dates",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/bookings",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "bookings"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"hotelId\": 1,\n  \"roomId\": 5,\n  \"guestName\": \"Charles Babbage\",\n  \"guestEmail\": \"charles@example.com\",\n  \"guests\": 1,\n  \"checkIn\": \"{{checkIn}}\",\n  \"checkOut\": \"{{checkOut}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 409\", () => pm.response.to.have.status(409));",
+                  "pm.test(\"error is room_unavailable\", () => pm.expect(pm.response.json().error).to.eql(\"room_unavailable\"));",
+                  "pm.test(\"Error body has error and message\", () => { const b = pm.response.json(); pm.expect(b).to.have.property(\"error\"); pm.expect(b).to.have.property(\"message\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Capacity exceeded – 2 guests in a single",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/bookings",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "bookings"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"hotelId\": 1,\n  \"roomId\": 1,\n  \"guestName\": \"Alan Turing\",\n  \"guestEmail\": \"alan@example.com\",\n  \"guests\": 2,\n  \"checkIn\": \"{{checkIn}}\",\n  \"checkOut\": \"{{checkOut}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 422\", () => pm.response.to.have.status(422));",
+                  "pm.test(\"error is capacity_exceeded\", () => pm.expect(pm.response.json().error).to.eql(\"capacity_exceeded\"));",
+                  "pm.test(\"Error body has error and message\", () => { const b = pm.response.json(); pm.expect(b).to.have.property(\"error\"); pm.expect(b).to.have.property(\"message\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Capacity exceeded – 5 guests in a deluxe",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/bookings",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "bookings"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"hotelId\": 1,\n  \"roomId\": 6,\n  \"guestName\": \"Alan Turing\",\n  \"guestEmail\": \"alan@example.com\",\n  \"guests\": 5,\n  \"checkIn\": \"{{checkIn}}\",\n  \"checkOut\": \"{{checkOut}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 422\", () => pm.response.to.have.status(422));",
+                  "pm.test(\"error is capacity_exceeded\", () => pm.expect(pm.response.json().error).to.eql(\"capacity_exceeded\"));",
+                  "pm.test(\"Error body has error and message\", () => { const b = pm.response.json(); pm.expect(b).to.have.property(\"error\"); pm.expect(b).to.have.property(\"message\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Room belongs to another hotel",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/bookings",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "bookings"
+              ]
+            },
+            "description": "Room 7 is in hotel 2.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"hotelId\": 1,\n  \"roomId\": 7,\n  \"guestName\": \"Alan Turing\",\n  \"guestEmail\": \"alan@example.com\",\n  \"guests\": 1,\n  \"checkIn\": \"{{checkIn}}\",\n  \"checkOut\": \"{{checkOut}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 404\", () => pm.response.to.have.status(404));",
+                  "pm.test(\"error is not_found\", () => pm.expect(pm.response.json().error).to.eql(\"not_found\"));",
+                  "pm.test(\"Error body has error and message\", () => { const b = pm.response.json(); pm.expect(b).to.have.property(\"error\"); pm.expect(b).to.have.property(\"message\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Hotel not found",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/bookings",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "bookings"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"hotelId\": 990,\n  \"roomId\": 1,\n  \"guestName\": \"Alan Turing\",\n  \"guestEmail\": \"alan@example.com\",\n  \"guests\": 1,\n  \"checkIn\": \"{{checkIn}}\",\n  \"checkOut\": \"{{checkOut}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 404\", () => pm.response.to.have.status(404));",
+                  "pm.test(\"error is not_found\", () => pm.expect(pm.response.json().error).to.eql(\"not_found\"));",
+                  "pm.test(\"Error body has error and message\", () => { const b = pm.response.json(); pm.expect(b).to.have.property(\"error\"); pm.expect(b).to.have.property(\"message\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Validation – several invalid fields",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/bookings",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "bookings"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"hotelId\": 1,\n  \"roomId\": 1,\n  \"guestName\": \"\",\n  \"guestEmail\": \"not-an-email\",\n  \"guests\": 0,\n  \"checkIn\": \"{{checkOut}}\",\n  \"checkOut\": \"{{checkIn}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"error is validation_error\", () => pm.expect(pm.response.json().error).to.eql(\"validation_error\"));",
+                  "pm.test(\"Error body has error and message\", () => { const b = pm.response.json(); pm.expect(b).to.have.property(\"error\"); pm.expect(b).to.have.property(\"message\"); });",
+                  "pm.test(\"Field errors reported\", () => pm.expect(pm.response.json().fields).to.include.all.keys(\"guestName\", \"guestEmail\", \"guests\", \"checkOut\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Validation – check-in in the past",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/bookings",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "bookings"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"hotelId\": 1,\n  \"roomId\": 1,\n  \"guestName\": \"Alan Turing\",\n  \"guestEmail\": \"alan@example.com\",\n  \"guests\": 1,\n  \"checkIn\": \"{{pastDate}}\",\n  \"checkOut\": \"{{checkIn}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"error is validation_error\", () => pm.expect(pm.response.json().error).to.eql(\"validation_error\"));",
+                  "pm.test(\"Error body has error and message\", () => { const b = pm.response.json(); pm.expect(b).to.have.property(\"error\"); pm.expect(b).to.have.property(\"message\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Validation – bad date format",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/bookings",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "bookings"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"hotelId\": 1,\n  \"roomId\": 1,\n  \"guestName\": \"Alan Turing\",\n  \"guestEmail\": \"alan@example.com\",\n  \"guests\": 1,\n  \"checkIn\": \"01/03/2027\",\n  \"checkOut\": \"{{checkOut}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"error is invalid_request\", () => pm.expect(pm.response.json().error).to.eql(\"invalid_request\"));",
+                  "pm.test(\"Error body has error and message\", () => { const b = pm.response.json(); pm.expect(b).to.have.property(\"error\"); pm.expect(b).to.have.property(\"message\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Malformed JSON",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/bookings",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "bookings"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{ \"hotelId\": 1, \"roomId\": ",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"error is invalid_request\", () => pm.expect(pm.response.json().error).to.eql(\"invalid_request\"));",
+                  "pm.test(\"Error body has error and message\", () => { const b = pm.response.json(); pm.expect(b).to.have.property(\"error\"); pm.expect(b).to.have.property(\"message\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unknown field",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/bookings",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "bookings"
+              ]
+            },
+            "description": "Unknown fields are rejected so typos don't pass silently.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"hotelId\": 1,\n  \"rooomId\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"error is invalid_request\", () => pm.expect(pm.response.json().error).to.eql(\"invalid_request\"));",
+                  "pm.test(\"Error body has error and message\", () => { const b = pm.response.json(); pm.expect(b).to.have.property(\"error\"); pm.expect(b).to.have.property(\"message\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Empty body",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/bookings",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "bookings"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"error is invalid_request\", () => pm.expect(pm.response.json().error).to.eql(\"invalid_request\"));",
+                  "pm.test(\"Error body has error and message\", () => { const b = pm.response.json(); pm.expect(b).to.have.property(\"error\"); pm.expect(b).to.have.property(\"message\"); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

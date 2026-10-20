@@ -1,0 +1,111 @@
+# Hotel Room Booking API
+
+
+## Quick start
+
+```bash
+docker compose up --build        # API on http://localhost:8080, Postgres on :5432
+curl -X POST localhost:8080/admin/seed
+curl "localhost:8080/hotels?name=seaside"
+```
+
+Migrations run automatically on start-up.
+The API logs can be seen in the docker logs or by also running (`docker compose logs -f api`). 
+Confirmation "emails" appear in two seconds after each booking.
+
+## Endpoints
+
+| Method | Path | Purpose | Success |
+|---|---|---|---|
+| GET | `/hotels?name={name}` | Find hotels by name (partial, case-insensitive) | 200 |
+| GET | `/hotels/{id}` | Get one hotel | 200 |
+| GET | `/hotels/{id}/rooms/available?checkIn=&checkOut=&guests=` | Rooms free for the whole stay that fit the party | 200 |
+| POST | `/bookings` | Book a room | 201 + `Location` |
+| GET | `/bookings/{reference}` | Booking details | 200 |
+| POST | `/admin/seed` | Reset, then load test data (idempotent) | 201 |
+| POST | `/admin/reset` | Remove all data | 200 |
+| GET | `/health` | Liveness + DB check | 200 |
+
+Dates are `YYYY-MM-DD`. `checkOut` is the departure day, so `2027-03-01 → 2027-03-04` is 3 nights.
+
+Booking request body:
+
+```json
+{
+  "hotelId": 1,
+  "roomId": 5,
+  "guestName": "Rob Pike",
+  "guestEmail": "rob@example.com",
+  "guests": 3, 
+  "checkIn": "2027-03-01",
+  "checkOut": "2027-03-04"
+}
+```
+
+Errors share one shape — `{"error": "code", "message": "...", "fields": {...}}`:
+
+| Status | `error` | When |
+|---|---|---|
+| 400 | `validation_error` / `invalid_request` | Bad dates, missing fields, malformed or unknown JSON fields |
+| 404 | `not_found` | Unknown hotel, room or booking (or room not in that hotel) |
+| 409 | `room_unavailable` | Room already booked on any of the requested nights |
+| 422 | `capacity_exceeded` | More guests than the room holds |
+
+The error codes are handled in `handler/response.go`
+
+## Seed data
+
+Two hotels, each with 6 rooms: 2 × single (capacity 1), 2 × double (2), 2 × deluxe (4).
+IDs are deterministic after a seed: hotel 1 has rooms 1–6, hotel 2 has rooms 7–12.
+A sample booking `BK-SEED0001` is created in hotel 1, room 201, starting a week from today.
+
+## Rule
+
+Rules are heavily enforced in the database, and also checks under concurrent requests, 
+the `service` layer checks the immediate ones first to return clear errors.
+
+| Rule | Enforcement |
+|---|---|
+| 3 room types | `room_types` table with a `CHECK (name IN ('single','double','deluxe'))` |
+| 6 rooms per hotel | Seed data, plus a trigger that rejects a 7th room |
+| No double booking | `EXCLUDE USING gist (room_id WITH =, daterange(check_in, check_out, '[)') WITH &&)` |
+| No room changes | A booking is one row for one room covering every night; availability only returns rooms free for the whole range |
+| Unique references | `UNIQUE` constraint; references are `BK-` + 8 random characters from `crypto/rand`, retried on the rare collision |
+| Capacity | Service check, plus a trigger on `bookings` |
+
+
+## Async confirmation email
+This is just to mimic a real world scenario, `notification` starts a goroutine per booking that waits 2 seconds
+(`EMAIL_DELAY_SECONDS` this can be modified) and then logs the email.
+
+## Project layout
+```
+cmd/api/main.go  wiring, HTTP server, graceful shutdown
+config           environment configuration
+database         connection with retry, embedded SQL migrations
+model            domain types, Date type, domain errors
+repository       SQL queries (database/sql), seed/reset
+service          business rules, depends only on interfaces
+handler          HTTP
+ service translation, error mapping
+notification     async email notifier
+server           routes (Go 1.27 ServeMux patterns), middleware
+open-api.json    postman collection tests
+```
+
+## Make commainds
+
+The Makefile is just a set of shortcuts. Each target is a name for a longer command, so instead of remembering or typing the full command you run make <target>. The project works fine without it: every target can be run by hand.
+
+```bash
+make up       # Build and start the API and Postgres
+make down     # Stop containers and delete the database volume
+```
+
+## Configuration
+
+| Variable | Default |
+|---|---|
+| `PORT` | `8080` |
+| `DATABASE_URL` | `postgres://hotel:hotel@localhost:5432/hotel?sslmode=disable` |
+| `EMAIL_DELAY_SECONDS` | `2` |
